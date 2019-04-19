@@ -48,4 +48,5 @@ else: unix:!android: target.path = /opt/$${TARGET}/bin
 
 DISTFILES += \
     avformat-58.dll \
-    avcodec-58.dll
+    avcodec-58.dll \
+    testvideo.mp4
