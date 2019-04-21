@@ -1,4 +1,4 @@
-/*
+sws_getCachedContext/*
  * Copyright (C) 2001-2011 Michael Niedermayer <michaelni@gmx.at>
  *
  * This file is part of FFmpeg.
