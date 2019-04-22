@@ -6,6 +6,8 @@
 #include <Windows.h>
 #include <iostream>
 
+#include <iostream>
+#include <vector>
 
 extern "C"
 {
@@ -21,6 +23,7 @@ MainWindow::MainWindow(QWidget *parent) :
     QMainWindow(parent),
     ui(new Ui::MainWindow)
 {
+
     ui->setupUi(this);
 
     //avformat functions
@@ -44,6 +47,9 @@ MainWindow::MainWindow(QWidget *parent) :
     typedef int (*avcodec_get_context_default3)(AVCodecContext*s, const AVCodec* codec);
     typedef attribute_deprecated int (*avcodec_copy_context)(AVCodecContext*dest, const AVCodecContext*src);
     typedef int (*avcodec_open2)(AVCodecContext *avctx, const AVCodec *codec, AVDictionary **options);
+    typedef int (*avpicture_fill)(AVPicture *picture, const uint8_t *ptr, enum AVPixelFormat pix_fmt, int width, int height);
+    typedef int (*avcodec_decode_video2)(AVCodecContext* avctx,AVFrame* picture, int* got_picture_ptr, const AVPacket* avpkt);
+    typedef attribute_deprecated void (*av_free_packet)(AVPacket* pkt);
 
     //swscale function
     typedef struct SwsContext* (*sws_getContext)(int srcW, int srcH, enum AVPixelFormat srcFormat, int dstW, int dstH, enum AVPixelFormat dstFormat, int flags, SwsFilter *srcFilter, SwsFilter *dstFilter, const double *param);
@@ -62,7 +68,7 @@ MainWindow::MainWindow(QWidget *parent) :
                                                         );
 
     //avutil function
-    typedef AVFrame (*av_frame_alloc)(void);
+    typedef AVFrame* (*av_frame_alloc)(void);
     typedef double (*av_q2d)(AVRational a);
     typedef int64_t (*av_rescale_q) (int64_t a, AVRational bq, AVRational cq) av_const;
     typedef const char * (*av_get_pix_fmt_name) (enum AVPixelFormat pix_fmt);
@@ -87,6 +93,9 @@ MainWindow::MainWindow(QWidget *parent) :
     static avcodec_get_context_default3 avcodeGetContextDefault3;
     static avcodec_copy_context avcodecCopyContext;
     static avcodec_open2 avcodecOpen;
+    static avpicture_fill avpictureFill;
+    static avcodec_decode_video2 avcodecDecode_video2;
+    static av_free_packet avFree_packet;
 
     static sws_getContext swsGetContext;
     static sws_scale swsScale;
@@ -122,7 +131,7 @@ MainWindow::MainWindow(QWidget *parent) :
         contextAlloc =(avformat_alloc_context)avformat.resolve("avformat_alloc_context");
         avformatVersion = (avformat_version)avformat.resolve("avformat_version");
         avReadplay = (av_read_play)avformat.resolve("av_read_play");
-        avpictureGetSize = (avpicture_get_size)avformat.resolve("avpicture_get_size");
+        avpictureGetSize = (avpicture_get_size)avcodec.resolve("avpicture_get_size");
         avFindBestStream = (av_find_best_stream)avformat.resolve("av_find_best_stream");
 
         //assign avcodec functions
@@ -133,6 +142,9 @@ MainWindow::MainWindow(QWidget *parent) :
         avcodeGetContextDefault3 = (avcodec_get_context_default3)avcodec.resolve("avcodec_get_context_default3");
         avcodecCopyContext = (avcodec_copy_context)avcodec.resolve("avcodec_copy_context");
         avcodecOpen = (avcodec_open2)avcodec.resolve("avcodec_open2");
+        avpictureFill = (avpicture_fill)avcodec.resolve("avpicture_fill");
+        avcodecDecode_video2 = (avcodec_decode_video2)avcodec.resolve("avcodec_decode_video2");
+        avFree_packet = (av_free_packet)avcodec.resolve("av_free_packet");
 
         //assign swscale function
         swsGetContext = (sws_getContext)swscale.resolve("sws_getContext");
@@ -212,61 +224,65 @@ MainWindow::MainWindow(QWidget *parent) :
         }
 
         std::cout << "output: " << dst_width << 'x' << dst_height << ',' << avGet_pix_fmt_name(dst_pix_fmt) << std::endl;
-        /*
 
-        AVCodecContext* ccontext = nullptr;
-        SwsContext *img_convert_ctx;
-        // Open the initial context variables that are needed
-        AVFormatContext* format_ctx = contextAlloc();
-        int video_stream_index;
+        // allocate frame buffer for output
+        AVFrame* frame = avFrameAlloc();
+        std::vector<uint8_t> framebuf(avpictureGetSize(dst_pix_fmt, dst_width, dst_height));
+        avpictureFill(reinterpret_cast<AVPicture*>(frame), framebuf.data(), dst_pix_fmt, dst_width, dst_height);
 
-        AVStream* stream = nullptr;
-        int cnt = 0;
 
-        //set the url link
-        int option = 2; // 1, local video, 2, rtsp protocal
-        const char* url;
-        if(option == 1) url = "C:/HIWI/VideoStreaming/Videostreaming/testvideo.mp4";
-        else url = "rtsp://184.72.239.149/vod/mp4:BigBuckBunny_115k.mov";
+        // decoding loop
+        AVFrame* decframe = avFrameAlloc();
+        unsigned nb_frames = 0;
+        bool end_of_stream = false;
+        int got_pic = 0;
+        AVPacket pkt;
 
-        //check validity of the url
-        if (openInput(&format_ctx, url,nullptr, nullptr) != 0) qDebug() << "did not open the input source";
-        else {
-            qDebug() << "library and video load successfully";
-            cnt = openInput(&format_ctx, url,nullptr, nullptr);
-        }
+        do {
+            if (!end_of_stream) {
+                // read packet from input file
+                ret = readFrame(inctx, &pkt);
+                if (ret < 0 && ret != AVERROR_EOF) {
+                    std::cerr << "fail to av_read_frame: ret=" << ret;
+                     qDebug() << "failed";
+                }
+                if (ret == 0 && pkt.stream_index != vstrm_idx)
+                    goto next_packet;
+                end_of_stream = (ret == AVERROR_EOF);
+            }
 
-        if (findStreamInfo(format_ctx,nullptr) < 0) qDebug() << "No stream info";
+            if (end_of_stream) {
+                // null packet for bumping process
+                initavPacket(&pkt);
+                pkt.data = nullptr;
+                pkt.size = 0;
+            }
 
-        //search video stream
-        for (int i = 0; i < format_ctx->nb_streams; i++) {
-            if (format_ctx->streams[i]->codec->codec_type == AVMEDIA_TYPE_VIDEO)
-                video_stream_index = i;
-        }
+            // decode video frame
+            avcodecDecode_video2(vstrm->codec, decframe, &got_pic, &pkt);
+            if (!got_pic)
+                goto next_packet;
+            /**
+            // convert frame to OpenCV matrix
+            swsScale(swsctx, decframe->data, decframe->linesize, 0, decframe->height, frame->data, frame->linesize);
+            {
+            cv::Mat image(dst_height, dst_width, CV_8UC3, framebuf.data(), frame->linesize[0]);
+            cv::imshow("press ESC to exit", image);
+            if (cv::waitKey(1) == 0x1b)
+                break;
+            }
+            std::cout << nb_frames << '\r' << std::flush;  // dump progress
+            ++nb_frames;
+            **/
 
-        AVPacket packet;
-        initavPacket(&packet);
+    next_packet:
+            avFree_packet(&pkt);
 
-        //start reading packets from stream and write them to file
-        avReadplay(format_ctx);
+        } while (!end_of_stream || got_pic);
 
-        //get the codec
-        const AVCodec *codec = nullptr;
-        codec = avCodecfindDecoder(AV_CODEC_ID_H264);
-        if(!codec) qDebug() << "No valid codec";
+        std::cout << nb_frames << " frames decoded" << std::endl;
 
-        ccontext = avcodecAlloccontext(codec);
-
-        //avcodeGetContextDefault3(ccontext,codec);
-        avcodecCopyContext(ccontext, format_ctx->streams[video_stream_index]->codec);
-
-        if (avcodecOpen(ccontext, codec, nullptr) < 0) exit(1);
-        img_convert_ctx = swsGetContext(ccontext->width, ccontext->height,ccontext->pix_fmt, ccontext->width, ccontext->height, AV_PIX_FMT_RGB24,SWS_BICUBIC, nullptr, nullptr, nullptr);
-
-        //int a = avpictureGetSize(AV_PIX_FMT_BGR24, ccontext->width, ccontext->height);
-        //qDebug() << a;
-
-        */
+        qDebug() << "pass";
     }
     else {
         qDebug() << "fail load library";

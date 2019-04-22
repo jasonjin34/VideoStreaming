@@ -24,6 +24,8 @@ DEFINES += QT_DEPRECATED_WARNINGS
 
 CONFIG += c++11
 
+LIBS+=-L"C:\HIWI\Release"
+
 INCLUDEPATH += "C:/HIWI/VideoStreaming/include"
 
 SOURCES += \
@@ -54,3 +56,9 @@ DISTFILES += \
     swscale-5.dll \
     avdevice-58.dll \
     avfilter-7.dll
+
+win32:CONFIG(release, debug|release): LIBS += -L$$PWD/../../lib/opencv-4.0.1/x64/vc15/lib/ -lopencv_world401
+else:win32:CONFIG(debug, debug|release): LIBS += -L$$PWD/../../lib/opencv-4.0.1/x64/vc15/lib/ -lopencv_world401d
+
+INCLUDEPATH += $$PWD/../../lib/opencv-4.0.1/include
+DEPENDPATH += $$PWD/../../lib/opencv-4.0.1/include
